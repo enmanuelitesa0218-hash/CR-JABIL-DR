@@ -39,9 +39,28 @@ function setupFirebaseListeners() {
     });
 
     // Escuchar datos de productividad en tiempo real
+    // Firebase devuelve objetos cuando se usa .push(), los convertimos a arrays
     window.db.ref('productivity').on('value', (snapshot) => {
-        const data = snapshot.val();
-        productivityData = data || {};
+        const raw = snapshot.val() || {};
+
+        // Convertir objetos de Firebase (.push) a arrays planos
+        productivityData = {};
+        Object.keys(raw).forEach(day => {
+            productivityData[day] = {};
+            Object.keys(raw[day] || {}).forEach(techId => {
+                productivityData[day][techId] = {};
+                Object.keys(raw[day][techId] || {}).forEach(hour => {
+                    const hourData = raw[day][techId][hour];
+                    // Si es objeto de Firebase (push), convertir a array
+                    if (hourData && typeof hourData === 'object' && !Array.isArray(hourData)) {
+                        productivityData[day][techId][hour] = Object.values(hourData);
+                    } else {
+                        productivityData[day][techId][hour] = Array.isArray(hourData) ? hourData : [];
+                    }
+                });
+            });
+        });
+
         localStorage.setItem('jabil_proto_data', JSON.stringify(productivityData));
         renderDashboard();
         updateKPIs();
@@ -90,19 +109,26 @@ async function deleteTechFromFirebase(techId) {
     await window.db.ref(`techs/${techId}`).remove();
 }
 
-async function saveProductivityEntry(day, techId, hour, entries) {
+async function pushProductivityEntries(day, techId, hour, newEntries) {
+    const safehour = hour.replace(/:/g, '-').replace(/ /g, '_');
+
     if (!window.db) {
+        // Sin Firebase: acumular en local
         if (!productivityData[day]) productivityData[day] = {};
         if (!productivityData[day][techId]) productivityData[day][techId] = {};
-        productivityData[day][techId][hour] = entries;
+        if (!productivityData[day][techId][safehour]) productivityData[day][techId][safehour] = [];
+        newEntries.forEach(e => productivityData[day][techId][safehour].push(e));
         localStorage.setItem('jabil_proto_data', JSON.stringify(productivityData));
-        refreshUI();
+        renderDashboard();
         updateKPIs();
         updateTotalGlobal();
         return;
     }
-    const safehour = hour.replace(/:/g, '-').replace(/ /g, '_');
-    await window.db.ref(`productivity/${day}/${techId}/${safehour}`).set(entries);
+
+    // Con Firebase: usar .push() para cada entrada (acumulativo, nunca sobreescribe)
+    const ref = window.db.ref(`productivity/${day}/${techId}/${safehour}`);
+    const pushPromises = newEntries.map(entry => ref.push(entry));
+    await Promise.all(pushPromises);
 }
 
 // ------------------------------------------
@@ -375,16 +401,13 @@ function autoDetectHour() {
 async function submitEntry(techId, serials) {
     const day = new Date().toISOString().split('T')[0];
     const hour = autoDetectHour();
-
-    // Leer el array existente del estado local
-    if (!productivityData[day]) productivityData[day] = {};
-    if (!productivityData[day][techId]) productivityData[day][techId] = {};
-    if (!productivityData[day][techId][hour]) productivityData[day][techId][hour] = [];
-
     const ts = new Date().toLocaleTimeString('es-DO', { hour12: false }).substring(0, 5);
-    serials.forEach(s => productivityData[day][techId][hour].push({ serial: s, timestamp: ts }));
 
-    await saveProductivityEntry(day, techId, hour, productivityData[day][techId][hour]);
+    // Construir las nuevas entradas a agregar
+    const newEntries = serials.map(s => ({ serial: s, timestamp: ts }));
+
+    // Usar push() para SUMAR al acumulado existente, nunca reemplazar
+    await pushProductivityEntries(day, techId, hour, newEntries);
     showSuccessToast();
 }
 
