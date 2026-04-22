@@ -1,5 +1,5 @@
 // ==========================================
-// Productivity JABIL DR - CLOUD SYNC PRO (JSONBLOB)
+// Productivity JABIL DR - CLOUD SYNC PRO (RELIABLE)
 // ==========================================
 
 const globalHours = [
@@ -9,13 +9,13 @@ const globalHours = [
     "19:00 - 20:00", "20:00 - 21:00", "21:00 - 22:00", "22:00 - 23:00", "23:00 - 00:00"
 ];
 
-// SERVIDOR ULTRA ESTABLE
 const CLOUD_URL = "https://jsonblob.com/api/jsonBlob/019db2d4-b86a-7a84-b3a0-b612e3361427";
 
 // --- Global Data ---
 let appTechnicians = [];
 let productivityData = {};
 let productivityChartInstance = null;
+let isFirstLoad = true;
 
 // ------------------------------------------
 // Cloud Sync Logic
@@ -26,34 +26,44 @@ async function syncWithCloud() {
         const response = await fetch(CLOUD_URL);
         const data = await response.json();
         
-        // Si hay datos en la nube, los descargamos
+        // SOLO DESCARGAMOS SI LA NUBE TIENE DATOS REALES
         if (data && data.techs && data.techs.length > 0) {
             appTechnicians = data.techs;
             productivityData = data.productivity || {};
+            
             localStorage.setItem('jabil_techs_list', JSON.stringify(appTechnicians));
             localStorage.setItem('jabil_proto_data', JSON.stringify(productivityData));
+            
             refreshUI();
-        } else {
-            // Si la nube está vacía, subimos lo que tenemos localmente
-            console.log("Nube vacía. Sincronizando datos locales hacia la nube...");
+            updateLastSync();
+            console.log("Sincronización: Datos descargados de la nube.");
+        } else if (isFirstLoad) {
+            // Si es la primera vez y la nube está vacía, usamos lo local pero NO borramos nada
             loadLocalBackup();
-            saveToCloud(); // Subir lo local para que ya no esté vacío
         }
     } catch (error) {
-        console.warn("Cloud offline, using local backup.");
-        loadLocalBackup();
+        console.warn("Cloud offline, usando local.");
+        if (isFirstLoad) loadLocalBackup();
+    } finally {
+        isFirstLoad = false;
     }
 }
 
 function loadLocalBackup() {
-    appTechnicians = JSON.parse(localStorage.getItem('jabil_techs_list')) || [
-        { id: "JB-001", name: "Técnico Ejemplo", pin: "1234" }
+    const savedTechs = localStorage.getItem('jabil_techs_list');
+    const savedData = localStorage.getItem('jabil_proto_data');
+    
+    appTechnicians = savedTechs ? JSON.parse(savedTechs) : [
+        { id: "JB-001", name: "Juan Pérez", pin: "1234" }
     ];
-    productivityData = JSON.parse(localStorage.getItem('jabil_proto_data')) || {};
+    productivityData = savedData ? JSON.parse(savedData) : {};
     refreshUI();
 }
 
 async function saveToCloud() {
+    // NUNCA GUARDAR SI NO HAY TÉCNICOS (Evita sobreescritura accidental)
+    if (!appTechnicians || appTechnicians.length === 0) return;
+
     try {
         const dataToSave = {
             techs: appTechnicians,
@@ -62,14 +72,15 @@ async function saveToCloud() {
         };
         
         await fetch(CLOUD_URL, {
-            method: 'PUT', // JSONBlob usa PUT para actualizar
+            method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(dataToSave)
         });
         
         updateLastSync();
+        console.log("Sincronización: Datos subidos a la nube.");
     } catch (error) {
-        console.error("Error saving to cloud:", error);
+        console.error("Error al subir a la nube:", error);
     }
 }
 
@@ -85,12 +96,12 @@ function updateLastSync() {
     const el = document.getElementById('last-sync-time');
     if(el) {
         const now = new Date();
-        el.innerHTML = `<i class="fa-solid fa-cloud-check" style="color:#22c55e"></i> Cloud OK: ${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+        el.innerHTML = `<i class="fa-solid fa-cloud-check" style="color:#22c55e"></i> Online: ${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
     }
 }
 
-// Sincronizar cada 15 segundos
-setInterval(syncWithCloud, 15000);
+// Sincronizar automáticamente cada 20 segundos para ver cambios de otros
+setInterval(syncWithCloud, 20000);
 
 // ------------------------------------------
 // KPI & Dashboard Logic
