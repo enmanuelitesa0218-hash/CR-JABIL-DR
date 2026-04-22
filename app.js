@@ -1,273 +1,253 @@
 // ==========================================
-// Productivity JABIL DR - CLOUD SYNC PRO (IRON LOGIC V4)
+// Productivity JABIL DR - FIREBASE REALTIME
 // ==========================================
 
 const globalHours = [
-    "07:00 - 08:00", "08:00 - 09:00", "09:00 - 10:00", "10:00 - 11:00", 
-    "11:00 - 12:00", "12:00 - 13:00", "13:00 - 14:00", "14:00 - 15:00", 
+    "07:00 - 08:00", "08:00 - 09:00", "09:00 - 10:00", "10:00 - 11:00",
+    "11:00 - 12:00", "12:00 - 13:00", "13:00 - 14:00", "14:00 - 15:00",
     "15:00 - 16:00", "16:00 - 17:00", "17:00 - 18:00", "18:00 - 19:00",
     "19:00 - 20:00", "20:00 - 21:00", "21:00 - 22:00", "22:00 - 23:00", "23:00 - 00:00"
 ];
 
-const CLOUD_URL = "https://jsonblob.com/api/jsonBlob/019db2d4-c990-28f0-be2d-f95267d32c02";
-
-// --- Global Data ---
 let appTechnicians = [];
 let productivityData = {};
 let productivityChartInstance = null;
-let lastLocalChange = 0; // Timestamp del último cambio local
 
 // ------------------------------------------
-// Cloud Sync Logic
+// FIREBASE - Listeners en Tiempo Real
 // ------------------------------------------
-
-async function syncWithCloud() {
-    try {
-        const response = await fetch(CLOUD_URL);
-        if (!response.ok) return;
-        const data = await response.json();
-        
-        // REGLA DE ORO: Solo descargar si la nube es MÁS NUEVA que nuestro último cambio local
-        const cloudTimestamp = data.timestamp || 0;
-        
-        if (cloudTimestamp > lastLocalChange) {
-            console.log("Sincronización: Nube es más reciente. Actualizando...");
-            appTechnicians = data.techs || [];
-            productivityData = data.productivity || {};
-            
-            localStorage.setItem('jabil_techs_list', JSON.stringify(appTechnicians));
-            localStorage.setItem('jabil_proto_data', JSON.stringify(productivityData));
-            localStorage.setItem('jabil_last_ts', cloudTimestamp);
-            
-            refreshUI();
-            updateLastSync(true);
-        } else {
-            console.log("Sincronización: Local es más reciente o igual. No se requiere descarga.");
-        }
-    } catch (error) {
-        console.warn("Error en sync:", error);
+function setupFirebaseListeners() {
+    if (!window.db) {
+        console.warn("Firebase no configurado. Usando localStorage.");
+        loadLocalFallback();
+        return;
     }
+
+    // Escuchar técnicos en tiempo real
+    window.db.ref('techs').on('value', (snapshot) => {
+        const data = snapshot.val();
+        appTechnicians = data ? Object.values(data) : [];
+        localStorage.setItem('jabil_techs_list', JSON.stringify(appTechnicians));
+        refreshUI();
+        updateSyncStatus(true);
+    });
+
+    // Escuchar datos de productividad en tiempo real
+    window.db.ref('productivity').on('value', (snapshot) => {
+        const data = snapshot.val();
+        productivityData = data || {};
+        localStorage.setItem('jabil_proto_data', JSON.stringify(productivityData));
+        refreshUI();
+        updateKPIs();
+        updateTotalGlobal();
+        updateSyncStatus(true);
+    });
 }
 
-function loadLocalData() {
-    const savedTechs = localStorage.getItem('jabil_techs_list');
-    const savedData = localStorage.getItem('jabil_proto_data');
-    const savedTS = localStorage.getItem('jabil_last_ts');
-    
-    appTechnicians = savedTechs ? JSON.parse(savedTechs) : [];
-    productivityData = savedData ? JSON.parse(savedData) : {};
-    lastLocalChange = savedTS ? parseInt(savedTS) : 0;
-    
+function loadLocalFallback() {
+    appTechnicians = JSON.parse(localStorage.getItem('jabil_techs_list') || '[]');
+    productivityData = JSON.parse(localStorage.getItem('jabil_proto_data') || '{}');
     if (appTechnicians.length === 0) {
-        appTechnicians = [{ id: "JB-001", name: "Inicia agregando técnicos", pin: "1234" }];
+        appTechnicians = [{ id: "JB-001", name: "Técnico Demo", pin: "1234" }];
     }
     refreshUI();
-}
-
-async function saveToCloud() {
-    // Actualizar nuestro timestamp local ANTES de subir
-    lastLocalChange = Date.now();
-    localStorage.setItem('jabil_last_ts', lastLocalChange);
-
-    try {
-        const dataToSave = {
-            techs: appTechnicians,
-            productivity: productivityData,
-            timestamp: lastLocalChange
-        };
-        
-        await fetch(CLOUD_URL, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(dataToSave)
-        });
-        
-        updateLastSync(true);
-        console.log("Nube actualizada con éxito.");
-    } catch (error) {
-        console.error("Error al subir a la nube:", error);
-        updateLastSync(false);
-    }
-}
-
-function refreshUI() {
-    if(window.refreshTechSelect) window.refreshTechSelect();
-    if(window.renderAdminTable) window.renderAdminTable();
-    renderDashboard();
     updateKPIs();
     updateTotalGlobal();
 }
 
-function updateLastSync(isOnline) {
-    const el = document.getElementById('last-sync-time');
-    if(el) {
-        const now = new Date();
-        el.innerHTML = isOnline ? 
-            `<i class="fa-solid fa-cloud-check" style="color:#22c55e"></i> Cloud OK` :
-            `<i class="fa-solid fa-cloud-slash" style="color:#ef4444"></i> Offline`;
+// ------------------------------------------
+// GUARDAR EN FIREBASE
+// ------------------------------------------
+async function saveTechToFirebase(tech) {
+    if (!window.db) {
+        // Sin Firebase: guardar en localStorage
+        const idx = appTechnicians.findIndex(t => t.id === tech.id);
+        if (idx >= 0) appTechnicians[idx] = tech;
+        else appTechnicians.push(tech);
+        localStorage.setItem('jabil_techs_list', JSON.stringify(appTechnicians));
+        refreshUI();
+        return;
     }
+    await window.db.ref(`techs/${tech.id}`).set(tech);
 }
 
-// Sincronizar cada 20 segundos
-setInterval(syncWithCloud, 20000);
+async function deleteTechFromFirebase(techId) {
+    if (!window.db) {
+        appTechnicians = appTechnicians.filter(t => t.id !== techId);
+        localStorage.setItem('jabil_techs_list', JSON.stringify(appTechnicians));
+        refreshUI();
+        return;
+    }
+    await window.db.ref(`techs/${techId}`).remove();
+}
+
+async function saveProductivityEntry(day, techId, hour, entries) {
+    if (!window.db) {
+        if (!productivityData[day]) productivityData[day] = {};
+        if (!productivityData[day][techId]) productivityData[day][techId] = {};
+        productivityData[day][techId][hour] = entries;
+        localStorage.setItem('jabil_proto_data', JSON.stringify(productivityData));
+        refreshUI();
+        updateKPIs();
+        updateTotalGlobal();
+        return;
+    }
+    const safehour = hour.replace(/:/g, '-').replace(/ /g, '_');
+    await window.db.ref(`productivity/${day}/${techId}/${safehour}`).set(entries);
+}
 
 // ------------------------------------------
-// KPI & Dashboard Logic
+// UI Helpers
 // ------------------------------------------
+function refreshUI() {
+    if (window.refreshTechSelect) window.refreshTechSelect();
+    if (window.renderAdminTable) window.renderAdminTable();
+    renderDashboard();
+}
 
+function updateSyncStatus(online) {
+    const el = document.getElementById('last-sync-time');
+    if (!el) return;
+    const t = new Date();
+    const time = `${t.getHours().toString().padStart(2,'0')}:${t.getMinutes().toString().padStart(2,'0')}`;
+    el.innerHTML = online
+        ? `<i class="fa-solid fa-cloud-check" style="color:#22c55e"></i> Sync: ${time}`
+        : `<i class="fa-solid fa-cloud-slash" style="color:#ef4444"></i> Sin conexión`;
+}
+
+// ------------------------------------------
+// KPIs
+// ------------------------------------------
 function updateKPIs() {
     const today = new Date().toISOString().split('T')[0];
-    const currentMonthPrefix = today.substring(0, 7); 
-    
+    const monthPrefix = today.substring(0, 7);
+
     let shiftLeader = { name: "---", count: 0 };
     let monthLeader = { name: "---", count: 0 };
     let totalToday = 0;
-    
-    const techMonthlyTotals = {};
-    const techTodayTotals = {};
+    const dailyTotals = {};
+    const monthlyTotals = {};
 
-    Object.keys(productivityData).forEach(dateStr => {
-        const isToday = dateStr === today;
-        const isThisMonth = dateStr.startsWith(currentMonthPrefix);
-        
-        if (productivityData[dateStr]) {
-            Object.keys(productivityData[dateStr]).forEach(techId => {
-                let techCount = 0;
-                const hoursData = productivityData[dateStr][techId];
-                if (hoursData) {
-                    Object.values(hoursData).forEach(items => {
-                        techCount += Array.isArray(items) ? items.length : 0;
-                    });
-                }
-
-                if (isToday) {
-                    techTodayTotals[techId] = (techTodayTotals[techId] || 0) + techCount;
-                    totalToday += techCount;
-                }
-                if (isThisMonth) {
-                    techMonthlyTotals[techId] = (techMonthlyTotals[techId] || 0) + techCount;
-                }
+    Object.keys(productivityData).forEach(day => {
+        Object.keys(productivityData[day] || {}).forEach(tid => {
+            let count = 0;
+            Object.values(productivityData[day][tid] || {}).forEach(items => {
+                count += Array.isArray(items) ? items.length : 0;
             });
+            if (day === today) {
+                dailyTotals[tid] = (dailyTotals[tid] || 0) + count;
+                totalToday += count;
+            }
+            if (day.startsWith(monthPrefix)) {
+                monthlyTotals[tid] = (monthlyTotals[tid] || 0) + count;
+            }
+        });
+    });
+
+    Object.keys(dailyTotals).forEach(tid => {
+        if (dailyTotals[tid] > shiftLeader.count) {
+            const t = appTechnicians.find(t => t.id === tid);
+            shiftLeader = { name: t ? t.name : tid, count: dailyTotals[tid] };
+        }
+    });
+    Object.keys(monthlyTotals).forEach(tid => {
+        if (monthlyTotals[tid] > monthLeader.count) {
+            const t = appTechnicians.find(t => t.id === tid);
+            monthLeader = { name: t ? t.name : tid, count: monthlyTotals[tid] };
         }
     });
 
-    Object.keys(techTodayTotals).forEach(tid => {
-        if (techTodayTotals[tid] > shiftLeader.count) {
-            const tech = appTechnicians.find(t => t.id === tid);
-            shiftLeader = { name: tech ? tech.name : tid, count: techTodayTotals[tid] };
+    let h = new Date().getHours() - 7;
+    if (h <= 0) h = 1;
+    const efficiency = (totalToday / h).toFixed(1);
+
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set('total-hoy', totalToday);
+    set('shift-leader-name', shiftLeader.name);
+    set('shift-leader-count', `${shiftLeader.count} unidades`);
+    set('month-leader-name', monthLeader.name);
+    set('month-leader-count', `${monthLeader.count} unidades`);
+    set('avg-efficiency', efficiency);
+}
+
+function updateTotalGlobal() {
+    const start = document.getElementById('filter-date-start')?.value || '';
+    const end = document.getElementById('filter-date-end')?.value || '';
+    let total = 0;
+    Object.keys(productivityData).forEach(d => {
+        if (d >= start && d <= end) {
+            Object.values(productivityData[d] || {}).forEach(tData =>
+                Object.values(tData || {}).forEach(items => { total += Array.isArray(items) ? items.length : 0; })
+            );
         }
     });
-
-    Object.keys(techMonthlyTotals).forEach(tid => {
-        if (techMonthlyTotals[tid] > monthLeader.count) {
-            const tech = appTechnicians.find(t => t.id === tid);
-            monthLeader = { name: tech ? tech.name : tid, count: techMonthlyTotals[tid] };
-        }
-    });
-
-    const now = new Date();
-    let hoursPassed = now.getHours() - 7;
-    if (hoursPassed <= 0) hoursPassed = 1;
-    const efficiency = (totalToday / hoursPassed).toFixed(1);
-
-    const slName = document.getElementById('shift-leader-name');
-    const slCount = document.getElementById('shift-leader-count');
-    const mlName = document.getElementById('month-leader-name');
-    const mlCount = document.getElementById('month-leader-count');
-    const effVal = document.getElementById('avg-efficiency');
-    const totalHoy = document.getElementById('total-hoy');
-
-    if(slName) slName.textContent = shiftLeader.name;
-    if(slCount) slCount.textContent = `${shiftLeader.count} unidades`;
-    if(mlName) mlName.textContent = monthLeader.name;
-    if(mlCount) mlCount.textContent = `${monthLeader.count} unidades`;
-    if(effVal) effVal.textContent = efficiency;
-    if(totalHoy) totalHoy.textContent = totalToday;
+    const el = document.getElementById('total-hoy');
+    if (el) el.textContent = total;
 }
 
 // ------------------------------------------
-// UI Setup
+// INIT
 // ------------------------------------------
-
-document.addEventListener('DOMContentLoaded', async () => {
-    loadLocalData();
-    await syncWithCloud();
+document.addEventListener('DOMContentLoaded', () => {
+    setupFirebaseListeners();
     updateDate();
     initNavigation();
     initForm();
-    initAdmin(); 
+    initAdmin();
 
     if (localStorage.getItem('jabil_theme') === 'dark') {
         document.body.setAttribute('data-theme', 'dark');
     }
 });
 
-function getFilteredItems(techId, hour) {
-    const startStr = document.getElementById('filter-date-start').value;
-    const endStr = document.getElementById('filter-date-end').value;
-    let combinedItems = [];
-    
-    Object.keys(productivityData).forEach(dateStr => {
-        if (dateStr >= startStr && dateStr <= endStr) {
-            if (productivityData[dateStr] && productivityData[dateStr][techId]) {
-                let items = productivityData[dateStr][techId][hour];
-                if (Array.isArray(items)) combinedItems.push(...items);
-            }
-        }
-    });
-    return combinedItems;
-}
-
+// ------------------------------------------
+// DATE / CLOCK
+// ------------------------------------------
 function updateDate() {
-    const dateDisplay = document.getElementById('current-date');
-    if(dateDisplay) dateDisplay.textContent = new Date().toLocaleDateString('es-DO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-    
-    const startEl = document.getElementById('filter-date-start');
-    const endEl = document.getElementById('filter-date-end');
-    const nowStr = new Date().toISOString().split('T')[0];
-    
-    if(startEl && !startEl.value) startEl.value = nowStr;
-    if(endEl && !endEl.value) endEl.value = nowStr;
+    const el = document.getElementById('current-date');
+    if (el) el.textContent = new Date().toLocaleDateString('es-DO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-    [startEl, endEl].forEach(el => {
-        if(el) {
-            el.addEventListener('change', () => {
-                 updateKPIs();
-                 renderDashboard();
-                 if(document.getElementById('grafica-view').classList.contains('active')) renderChart();
-            });
-        }
+    const nowStr = new Date().toISOString().split('T')[0];
+    const s = document.getElementById('filter-date-start');
+    const e = document.getElementById('filter-date-end');
+    if (s && !s.value) s.value = nowStr;
+    if (e && !e.value) e.value = nowStr;
+
+    [s, e].forEach(el => {
+        if (el) el.addEventListener('change', () => {
+            updateKPIs();
+            renderDashboard();
+            if (document.getElementById('grafica-view')?.classList.contains('active')) renderChart();
+        });
     });
 
     initClock();
-    
-    const themeToggle = document.getElementById('theme-toggle');
-    if(themeToggle) {
-        themeToggle.addEventListener('click', () => {
-            const isDark = document.body.getAttribute('data-theme') === 'dark';
-            document.body.setAttribute('data-theme', isDark ? 'light' : 'dark');
-            localStorage.setItem('jabil_theme', isDark ? 'light' : 'dark');
-            themeToggle.innerHTML = isDark ? '<i class="fa-solid fa-moon"></i>' : '<i class="fa-solid fa-sun"></i>';
+
+    const tt = document.getElementById('theme-toggle');
+    if (tt) {
+        tt.addEventListener('click', () => {
+            const dark = document.body.getAttribute('data-theme') === 'dark';
+            document.body.setAttribute('data-theme', dark ? 'light' : 'dark');
+            localStorage.setItem('jabil_theme', dark ? 'light' : 'dark');
+            tt.innerHTML = dark ? '<i class="fa-solid fa-moon"></i>' : '<i class="fa-solid fa-sun"></i>';
         });
     }
 
-    const btnExport = document.getElementById('btn-export-excel');
-    if(btnExport) btnExport.addEventListener('click', exportToExcel);
+    const exp = document.getElementById('btn-export-excel');
+    if (exp) exp.addEventListener('click', exportToExcel);
 }
 
 function initClock() {
-    const clockDisp = document.getElementById('live-clock-display');
-    if(clockDisp) {
-        setInterval(() => {
-            clockDisp.textContent = new Date().toLocaleTimeString('es-DO', { hour12: false });
-        }, 1000);
-    }
+    const el = document.getElementById('live-clock-display');
+    if (el) setInterval(() => { el.textContent = new Date().toLocaleTimeString('es-DO', { hour12: false }); }, 1000);
 }
 
+// ------------------------------------------
+// NAVIGATION
+// ------------------------------------------
 function initNavigation() {
     const navBtns = document.querySelectorAll('.nav-btn');
     const views = document.querySelectorAll('.view');
-    
     const modal = document.getElementById('admin-auth-modal');
     const passInput = document.getElementById('admin-password-input');
     let authCb = null;
@@ -276,7 +256,7 @@ function initNavigation() {
         authCb = cb;
         passInput.value = '';
         const stored = localStorage.getItem('jabil_admin_password');
-        document.getElementById('auth-modal-desc').textContent = stored ? "Ingresa la Clave Maestra." : "Crea una Clave Maestra:";
+        document.getElementById('auth-modal-desc').textContent = stored ? "Ingresa la Clave Maestra." : "Crea una Clave Maestra (mínimo 3 caracteres):";
         modal.classList.add('active');
         setTimeout(() => passInput.focus(), 100);
     };
@@ -285,13 +265,13 @@ function initNavigation() {
     document.getElementById('btn-auth-submit').onclick = () => {
         const val = passInput.value;
         const stored = localStorage.getItem('jabil_admin_password');
-        if(!stored && val.length >= 3) {
+        if (!stored && val.length >= 3) {
             localStorage.setItem('jabil_admin_password', val);
             modal.classList.remove('active');
-            if(authCb) authCb();
-        } else if(val === stored) {
+            if (authCb) authCb();
+        } else if (val === stored) {
             modal.classList.remove('active');
-            if(authCb) authCb();
+            if (authCb) authCb();
         } else {
             alert("Clave incorrecta.");
         }
@@ -305,23 +285,25 @@ function initNavigation() {
                 btn.classList.add('active');
                 views.forEach(v => v.classList.remove('active'));
                 document.getElementById(targetId).classList.add('active');
-                if(targetId === 'dashboard-view') renderDashboard();
-                if(targetId === 'grafica-view') renderChart();
+                if (targetId === 'dashboard-view') renderDashboard();
+                if (targetId === 'grafica-view') renderChart();
             };
-
-            if(targetId === 'tecnicos-view') showAdminAuthModal(action);
+            if (targetId === 'tecnicos-view') window.showAdminAuthModal(action);
             else action();
         });
     });
 }
 
+// ------------------------------------------
+// FORM (Registro)
+// ------------------------------------------
 function initForm() {
     const techSelect = document.getElementById('tech-select');
     const form = document.getElementById('registro-form');
 
     window.refreshTechSelect = () => {
-        if(!techSelect) return;
-        const currentVal = techSelect.value;
+        if (!techSelect) return;
+        const cur = techSelect.value;
         techSelect.innerHTML = '<option value="" disabled selected>Selecciona un técnico</option>';
         appTechnicians.forEach(t => {
             const opt = document.createElement('option');
@@ -329,45 +311,48 @@ function initForm() {
             opt.textContent = t.name;
             techSelect.appendChild(opt);
         });
-        if(currentVal) techSelect.value = currentVal;
+        if (cur) techSelect.value = cur;
     };
 
     let isAuth = false;
     techSelect.addEventListener('change', () => {
-        if(isAuth) return;
+        if (isAuth) return;
         const tech = appTechnicians.find(t => t.id === techSelect.value);
-        if(tech && tech.pin) {
+        if (tech && tech.pin) {
             isAuth = true;
-            showTechAuthModal(tech, () => { isAuth = false; document.getElementById('scanner-input').focus(); }, () => { isAuth = false; techSelect.value = ''; });
+            showTechPinModal(tech,
+                () => { isAuth = false; document.getElementById('scanner-input')?.focus(); },
+                () => { isAuth = false; techSelect.value = ''; }
+            );
         }
     });
 
     const numInput = document.getElementById('repairs-input');
-    document.querySelector('.decrease').onclick = () => { if(numInput.value > 1) numInput.value--; };
+    document.querySelector('.decrease').onclick = () => { if (numInput.value > 1) numInput.value--; };
     document.querySelector('.increase').onclick = () => { numInput.value++; };
 
     const scanner = document.getElementById('scanner-input');
-    if(scanner) {
-        scanner.addEventListener('keypress', (e) => {
-            if(e.key === 'Enter') {
-                const val = scanner.value.trim();
-                if(!val) return;
-                const found = appTechnicians.find(t => t.id === val);
-                if(found) { techSelect.value = found.id; scanner.value = ''; return; }
-                const tid = techSelect.value;
-                if(!tid) { alert('Selecciona técnico.'); scanner.value=''; return; }
-                submitProductivity(tid, autoDetectHour(), [val]);
-                scanner.value = '';
-            }
+    if (scanner) {
+        scanner.addEventListener('keypress', async (e) => {
+            if (e.key !== 'Enter') return;
+            const val = scanner.value.trim();
+            if (!val) return;
+            const found = appTechnicians.find(t => t.id === val);
+            if (found) { techSelect.value = found.id; scanner.value = ''; return; }
+            const tid = techSelect.value;
+            if (!tid) { alert('Selecciona un técnico primero.'); scanner.value = ''; return; }
+            await submitEntry(tid, [val]);
+            scanner.value = '';
         });
     }
 
-    if(form) {
-        form.onsubmit = (e) => {
+    if (form) {
+        form.onsubmit = async (e) => {
             e.preventDefault();
             const tid = techSelect.value;
-            if(!tid) return;
-            submitProductivity(tid, autoDetectHour(), Array(parseInt(numInput.value)).fill("Manual"));
+            if (!tid) return;
+            const qty = parseInt(numInput.value) || 1;
+            await submitEntry(tid, Array(qty).fill("Manual"));
             numInput.value = 1;
         };
     }
@@ -378,71 +363,82 @@ function autoDetectHour() {
     return `${h.toString().padStart(2,'0')}:00 - ${(h+1).toString().padStart(2,'0')}:00`;
 }
 
-function submitProductivity(techId, hour, serials) {
+async function submitEntry(techId, serials) {
     const day = new Date().toISOString().split('T')[0];
-    if(!productivityData[day]) productivityData[day] = {};
-    if(!productivityData[day][techId]) productivityData[day][techId] = {};
-    if(!productivityData[day][techId][hour]) productivityData[day][techId][hour] = [];
-    
-    const ts = new Date().toLocaleTimeString('es-DO', {hour12:false}).substring(0,5);
-    serials.forEach(s => productivityData[day][techId][hour].push({serial: s, timestamp: ts}));
+    const hour = autoDetectHour();
 
-    saveToCloud();
-    refreshUI();
-    showSuccessNotification();
+    // Leer el array existente del estado local
+    if (!productivityData[day]) productivityData[day] = {};
+    if (!productivityData[day][techId]) productivityData[day][techId] = {};
+    if (!productivityData[day][techId][hour]) productivityData[day][techId][hour] = [];
+
+    const ts = new Date().toLocaleTimeString('es-DO', { hour12: false }).substring(0, 5);
+    serials.forEach(s => productivityData[day][techId][hour].push({ serial: s, timestamp: ts }));
+
+    await saveProductivityEntry(day, techId, hour, productivityData[day][techId][hour]);
+    showSuccessToast();
 }
 
-function showSuccessNotification() {
+function showSuccessToast() {
     const toast = document.getElementById('success-toast');
-    if(!toast) return;
+    if (!toast) return;
     toast.style.display = 'flex';
     setTimeout(() => {
         toast.style.display = 'none';
-        const dashBtn = document.querySelector('[data-target="dashboard-view"]');
-        if(dashBtn) dashBtn.click();
+        document.querySelector('[data-target="dashboard-view"]')?.click();
     }, 1500);
 }
 
+// ------------------------------------------
+// DASHBOARD TABLE
+// ------------------------------------------
+function getFilteredItems(techId, hour) {
+    const start = document.getElementById('filter-date-start')?.value || '';
+    const end = document.getElementById('filter-date-end')?.value || '';
+    let items = [];
+    const safehour = hour.replace(/:/g, '-').replace(/ /g, '_');
+
+    Object.keys(productivityData).forEach(day => {
+        if (day >= start && day <= end) {
+            const hourData = productivityData[day]?.[techId]?.[safehour]
+                          || productivityData[day]?.[techId]?.[hour];
+            if (Array.isArray(hourData)) items.push(...hourData);
+        }
+    });
+    return items;
+}
+
 function renderDashboard() {
-    const tableHeader = document.getElementById('table-header-row');
-    const tableBody = document.getElementById('dashboard-table-body');
-    if(!tableHeader || !tableBody) return;
+    const header = document.getElementById('table-header-row');
+    const body = document.getElementById('dashboard-table-body');
+    if (!header || !body) return;
 
-    tableHeader.innerHTML = '<th>Técnico</th>' + globalHours.map(h => `<th>${h}</th>`).join('') + '<th class="total-col">Total</th>';
+    header.innerHTML = '<th>Técnico</th>' + globalHours.map(h => `<th>${h}</th>`).join('') + '<th class="total-col">Total</th>';
 
-    tableBody.innerHTML = appTechnicians.map(tech => {
+    body.innerHTML = appTechnicians.map(tech => {
         let rowTotal = 0;
         const cells = globalHours.map(hour => {
             const val = getFilteredItems(tech.id, hour).length;
             rowTotal += val;
-            let cls = 'val-cell' + (val === 0 ? ' zero' : (val <= 5 ? ' heat-low' : (val <= 10 ? ' heat-med' : ' heat-high')));
-            return `<td class="${cls}">${val > 0 ? val : '-'}</td>`;
+            const cls = val === 0 ? 'zero' : val <= 5 ? 'heat-low' : val <= 10 ? 'heat-med' : 'heat-high';
+            return `<td class="val-cell ${cls}">${val > 0 ? val : '-'}</td>`;
         }).join('');
         return `<tr><td>${tech.name}</td>${cells}<td class="val-cell total-col">${rowTotal}</td></tr>`;
     }).join('');
 }
 
-function updateTotalGlobal() {
-    let total = 0;
-    const start = document.getElementById('filter-date-start').value;
-    const end = document.getElementById('filter-date-end').value;
-    Object.keys(productivityData).forEach(d => {
-        if(d >= start && d <= end) {
-            Object.values(productivityData[d]).forEach(tData => Object.values(tData).forEach(items => total += items.length));
-        }
-    });
-    if(document.getElementById('total-hoy')) document.getElementById('total-hoy').textContent = total;
-}
-
+// ------------------------------------------
+// CHART
+// ------------------------------------------
 function renderChart() {
     const canvas = document.getElementById('productivityChart');
-    if(!canvas) return;
+    if (!canvas) return;
     const datasets = appTechnicians.map((tech, i) => ({
         label: tech.name,
         data: globalHours.map(h => getFilteredItems(tech.id, h).length),
-        backgroundColor: `hsla(${i * 50}, 70%, 50%, 0.7)`
+        backgroundColor: `hsla(${i * 50}, 70%, 55%, 0.75)`
     }));
-    if(productivityChartInstance) productivityChartInstance.destroy();
+    if (productivityChartInstance) productivityChartInstance.destroy();
     productivityChartInstance = new Chart(canvas.getContext('2d'), {
         type: 'bar',
         data: { labels: globalHours.map(h => h.split(' ')[0]), datasets },
@@ -450,15 +446,19 @@ function renderChart() {
     });
 }
 
-function showTechAuthModal(tech, ok, cancel) {
+// ------------------------------------------
+// ADMIN - Técnicos
+// ------------------------------------------
+function showTechPinModal(tech, ok, cancel) {
     const m = document.getElementById('tech-auth-modal');
     const input = document.getElementById('tech-password-input');
-    document.getElementById('tech-auth-desc').textContent = `Hola ${tech.name}, PIN:`;
+    document.getElementById('tech-auth-desc').textContent = `Hola ${tech.name}, ingresa tu PIN:`;
+    input.value = '';
     m.classList.add('active');
     setTimeout(() => input.focus(), 100);
     document.getElementById('btn-tech-cancel').onclick = () => { m.classList.remove('active'); cancel(); };
     document.getElementById('btn-tech-submit').onclick = () => {
-        if(input.value === tech.pin) { m.classList.remove('active'); ok(); }
+        if (input.value === tech.pin) { m.classList.remove('active'); ok(); }
         else alert("PIN incorrecto");
     };
 }
@@ -469,56 +469,62 @@ function initAdmin() {
     const nameIn = document.getElementById('new-tech-name');
     const pinIn = document.getElementById('new-tech-pin');
     const subBtn = document.getElementById('btn-add-tech');
-    let editIdx = -1;
+    let editId = null;
 
     window.renderAdminTable = () => {
-        if(!body) return;
-        body.innerHTML = appTechnicians.map((t, i) => `
-            <tr><td>${t.id}</td><td>${t.name}</td><td>****</td>
-            <td>
-                <button class="btn-primary" style="width:auto;padding:5px 10px;margin-right:5px;" onclick="editTech(${i})"><i class="fa-solid fa-pen"></i></button>
-                <button class="btn-danger" style="width:auto;padding:5px 10px;" onclick="deleteTech(${i})"><i class="fa-solid fa-trash"></i></button>
-            </td></tr>`).join('');
+        if (!body) return;
+        body.innerHTML = appTechnicians.map(t => `
+            <tr>
+                <td>${t.id}</td>
+                <td>${t.name}</td>
+                <td>****</td>
+                <td>
+                    <button class="btn-primary" style="width:auto;padding:5px 10px;margin-right:5px;" onclick="editTech('${t.id}')"><i class="fa-solid fa-pen"></i></button>
+                    <button class="btn-danger" style="width:auto;padding:5px 10px;" onclick="deleteTech('${t.id}')"><i class="fa-solid fa-trash"></i></button>
+                </td>
+            </tr>`).join('');
     };
 
-    window.editTech = (i) => {
-        editIdx = i;
-        const t = appTechnicians[i];
+    window.editTech = (id) => {
+        editId = id;
+        const t = appTechnicians.find(t => t.id === id);
+        if (!t) return;
         idIn.value = t.id; idIn.disabled = true;
         nameIn.value = t.name; pinIn.value = t.pin;
-        subBtn.innerHTML = '<i class="fa-solid fa-check"></i>';
+        subBtn.innerHTML = '<i class="fa-solid fa-check"></i> Guardar';
+        nameIn.focus();
     };
 
-    window.deleteTech = (i) => {
-        if(confirm(`¿Eliminar a ${appTechnicians[i].name}?`)) {
-            appTechnicians.splice(i, 1);
-            saveToCloud();
-            renderAdminTable(); window.refreshTechSelect(); renderDashboard();
-        }
+    window.deleteTech = async (id) => {
+        const t = appTechnicians.find(t => t.id === id);
+        if (!t) return;
+        if (!confirm(`¿Eliminar a ${t.name}?`)) return;
+        await deleteTechFromFirebase(id);
     };
 
-    document.getElementById('add-tech-form').onsubmit = (e) => {
+    document.getElementById('add-tech-form').onsubmit = async (e) => {
         e.preventDefault();
-        if(editIdx >= 0) {
-            appTechnicians[editIdx].name = nameIn.value;
-            appTechnicians[editIdx].pin = pinIn.value;
-            editIdx = -1;
-        } else {
-            appTechnicians.push({id: idIn.value, name: nameIn.value, pin: pinIn.value});
-        }
+        const tech = { id: idIn.value.trim(), name: nameIn.value.trim(), pin: pinIn.value.trim() };
+        if (!tech.id || !tech.name || !tech.pin) return;
+        await saveTechToFirebase(tech);
+        editId = null;
         idIn.value = ''; idIn.disabled = false; nameIn.value = ''; pinIn.value = '';
         subBtn.innerHTML = '<i class="fa-solid fa-plus"></i>';
-        saveToCloud(); renderAdminTable(); window.refreshTechSelect(); renderDashboard();
     };
+
     renderAdminTable();
 }
 
+// ------------------------------------------
+// EXPORT
+// ------------------------------------------
 function exportToExcel() {
     let csv = "\uFEFFFecha,Técnico,Hora,Unidades\n";
     Object.keys(productivityData).forEach(d => {
-        Object.keys(productivityData[d]).forEach(tid => {
-            Object.keys(productivityData[d][tid]).forEach(h => {
-                csv += `"${d}","${tid}","${h}",${productivityData[d][tid][h].length}\n`;
+        Object.keys(productivityData[d] || {}).forEach(tid => {
+            Object.keys(productivityData[d][tid] || {}).forEach(h => {
+                const count = (productivityData[d][tid][h] || []).length;
+                csv += `"${d}","${tid}","${h}",${count}\n`;
             });
         });
     });

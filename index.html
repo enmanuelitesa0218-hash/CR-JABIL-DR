@@ -287,24 +287,20 @@
     <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
 
     <script>
-        // CONFIGURACIÓN DE FIREBASE
+        // CONFIGURACIÓN DE FIREBASE - JB DASHBOARD
         const firebaseConfig = {
-            apiKey: "REEMPLAZAR_CON_TU_API_KEY",
-            authDomain: "TU_PROYECTO.firebaseapp.com",
-            databaseURL: "https://TU_PROYECTO-default-rtdb.firebaseio.com",
-            projectId: "TU_PROYECTO",
-            storageBucket: "TU_PROYECTO.appspot.com",
-            messagingSenderId: "TU_SENDER_ID",
-            appId: "TU_APP_ID"
+            apiKey: "AIzaSyCGs6D6TS5owqyeXgpYgnEgpWTMWx2XsZo",
+            authDomain: "jb-dashboard-86c3d.firebaseapp.com",
+            databaseURL: "https://jb-dashboard-86c3d-default-rtdb.firebaseio.com",
+            projectId: "jb-dashboard-86c3d",
+            storageBucket: "jb-dashboard-86c3d.firebasestorage.app",
+            messagingSenderId: "840492917794",
+            appId: "1:840492917794:web:e772b643d3a5e89a09567b"
         };
 
-        if (firebaseConfig.apiKey !== "REEMPLAZAR_CON_TU_API_KEY") {
-            firebase.initializeApp(firebaseConfig);
-            window.db = firebase.database();
-        } else {
-            console.warn("Firebase no configurado. Se usará almacenamiento local.");
-            window.db = null;
-        }
+        firebase.initializeApp(firebaseConfig);
+        window.db = firebase.database();
+        console.log("✅ Firebase conectado a JB DASHBOARD");
     </script>
     <script src="app.js"></script>
 </body>
