@@ -17,11 +17,15 @@ let productivityChartInstance = null;
 // FIREBASE - Listeners en Tiempo Real
 // ------------------------------------------
 function setupFirebaseListeners() {
+    // Verificar que Firebase está disponible
     if (!window.db) {
-        console.warn("Firebase no configurado. Usando localStorage.");
+        console.error("❌ Firebase no disponible. Revisa las credenciales en index.html.");
         loadLocalFallback();
         return;
     }
+
+    console.log("✅ Firebase activo. Escuchando cambios en tiempo real...");
+    updateSyncStatus(true);
 
     // Escuchar técnicos en tiempo real
     window.db.ref('techs').on('value', (snapshot) => {
@@ -29,7 +33,9 @@ function setupFirebaseListeners() {
         appTechnicians = data ? Object.values(data) : [];
         localStorage.setItem('jabil_techs_list', JSON.stringify(appTechnicians));
         refreshUI();
-        updateSyncStatus(true);
+    }, (error) => {
+        console.error("Error leyendo técnicos:", error);
+        updateSyncStatus(false);
     });
 
     // Escuchar datos de productividad en tiempo real
@@ -37,10 +43,13 @@ function setupFirebaseListeners() {
         const data = snapshot.val();
         productivityData = data || {};
         localStorage.setItem('jabil_proto_data', JSON.stringify(productivityData));
-        refreshUI();
+        renderDashboard();
         updateKPIs();
         updateTotalGlobal();
         updateSyncStatus(true);
+    }, (error) => {
+        console.error("Error leyendo productividad:", error);
+        updateSyncStatus(false);
     });
 }
 
