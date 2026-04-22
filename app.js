@@ -1,5 +1,5 @@
 // ==========================================
-// Productivity JABIL DR - CLOUD SYNC PRO (RELIABLE)
+// Productivity JABIL DR - CLOUD SYNC PRO (RELIABLE V3)
 // ==========================================
 
 const globalHours = [
@@ -9,13 +9,13 @@ const globalHours = [
     "19:00 - 20:00", "20:00 - 21:00", "21:00 - 22:00", "22:00 - 23:00", "23:00 - 00:00"
 ];
 
-const CLOUD_URL = "https://jsonblob.com/api/jsonBlob/019db2d4-b86a-7a84-b3a0-b612e3361427";
+// NUEVA BÓVEDA LIMPIA
+const CLOUD_URL = "https://jsonblob.com/api/jsonBlob/019db2da-c990-28f0-be2d-f95267d32c02";
 
 // --- Global Data ---
 let appTechnicians = [];
 let productivityData = {};
 let productivityChartInstance = null;
-let isFirstLoad = true;
 
 // ------------------------------------------
 // Cloud Sync Logic
@@ -24,45 +24,51 @@ let isFirstLoad = true;
 async function syncWithCloud() {
     try {
         const response = await fetch(CLOUD_URL);
+        if (!response.ok) throw new Error("Server error");
+        
         const data = await response.json();
         
-        // SOLO DESCARGAMOS SI LA NUBE TIENE DATOS REALES
-        if (data && data.techs && data.techs.length > 0) {
+        // CANDADO DE SEGURIDAD: Solo aceptar si trae técnicos
+        if (data && Array.isArray(data.techs) && data.techs.length > 0) {
+            console.log("Datos recibidos de la nube correctamente.");
             appTechnicians = data.techs;
             productivityData = data.productivity || {};
             
+            // Guardar en memoria local por si acaso
             localStorage.setItem('jabil_techs_list', JSON.stringify(appTechnicians));
             localStorage.setItem('jabil_proto_data', JSON.stringify(productivityData));
             
             refreshUI();
-            updateLastSync();
-            console.log("Sincronización: Datos descargados de la nube.");
-        } else if (isFirstLoad) {
-            // Si es la primera vez y la nube está vacía, usamos lo local pero NO borramos nada
-            loadLocalBackup();
+            updateLastSync(true);
+        } else {
+            console.warn("La nube envió datos vacíos. Ignorando para proteger datos locales.");
+            // Si la nube está vacía pero tenemos datos locales, los subimos para inicializar la nube
+            if (appTechnicians.length > 0) {
+                saveToCloud();
+            }
         }
     } catch (error) {
-        console.warn("Cloud offline, usando local.");
-        if (isFirstLoad) loadLocalBackup();
-    } finally {
-        isFirstLoad = false;
+        console.warn("No se pudo conectar a la nube. Usando memoria local.");
+        updateLastSync(false);
     }
 }
 
-function loadLocalBackup() {
+function loadLocalData() {
     const savedTechs = localStorage.getItem('jabil_techs_list');
     const savedData = localStorage.getItem('jabil_proto_data');
     
-    appTechnicians = savedTechs ? JSON.parse(savedTechs) : [
-        { id: "JB-001", name: "Juan Pérez", pin: "1234" }
-    ];
+    appTechnicians = savedTechs ? JSON.parse(savedTechs) : [];
     productivityData = savedData ? JSON.parse(savedData) : {};
+    
+    if (appTechnicians.length === 0) {
+        appTechnicians = [{ id: "JB-001", name: "Técnico Inicial", pin: "1234" }];
+    }
     refreshUI();
 }
 
 async function saveToCloud() {
-    // NUNCA GUARDAR SI NO HAY TÉCNICOS (Evita sobreescritura accidental)
-    if (!appTechnicians || appTechnicians.length === 0) return;
+    // PROTECCIÓN: No subir si no hay nada
+    if (appTechnicians.length === 0) return;
 
     try {
         const dataToSave = {
@@ -71,16 +77,19 @@ async function saveToCloud() {
             lastUpdate: new Date().toISOString()
         };
         
-        await fetch(CLOUD_URL, {
+        const response = await fetch(CLOUD_URL, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(dataToSave)
         });
-        
-        updateLastSync();
-        console.log("Sincronización: Datos subidos a la nube.");
+
+        if (response.ok) {
+            console.log("Datos respaldados en la nube con éxito.");
+            updateLastSync(true);
+        }
     } catch (error) {
-        console.error("Error al subir a la nube:", error);
+        console.error("Error al respaldar en la nube:", error);
+        updateLastSync(false);
     }
 }
 
@@ -92,15 +101,18 @@ function refreshUI() {
     updateTotalGlobal();
 }
 
-function updateLastSync() {
+function updateLastSync(isOnline) {
     const el = document.getElementById('last-sync-time');
     if(el) {
         const now = new Date();
-        el.innerHTML = `<i class="fa-solid fa-cloud-check" style="color:#22c55e"></i> Online: ${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+        const time = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+        el.innerHTML = isOnline ? 
+            `<i class="fa-solid fa-cloud-check" style="color:#22c55e"></i> Online: ${time}` :
+            `<i class="fa-solid fa-cloud-slash" style="color:#ef4444"></i> Offline: ${time}`;
     }
 }
 
-// Sincronizar automáticamente cada 20 segundos para ver cambios de otros
+// Sincronizar cada 20 segundos
 setInterval(syncWithCloud, 20000);
 
 // ------------------------------------------
@@ -122,21 +134,25 @@ function updateKPIs() {
         const isToday = dateStr === today;
         const isThisMonth = dateStr.startsWith(currentMonthPrefix);
         
-        Object.keys(productivityData[dateStr]).forEach(techId => {
-            let techCount = 0;
-            const hoursData = productivityData[dateStr][techId];
-            Object.values(hoursData).forEach(items => {
-                techCount += Array.isArray(items) ? items.length : 0;
-            });
+        if (productivityData[dateStr]) {
+            Object.keys(productivityData[dateStr]).forEach(techId => {
+                let techCount = 0;
+                const hoursData = productivityData[dateStr][techId];
+                if (hoursData) {
+                    Object.values(hoursData).forEach(items => {
+                        techCount += Array.isArray(items) ? items.length : 0;
+                    });
+                }
 
-            if (isToday) {
-                techTodayTotals[techId] = (techTodayTotals[techId] || 0) + techCount;
-                totalToday += techCount;
-            }
-            if (isThisMonth) {
-                techMonthlyTotals[techId] = (techMonthlyTotals[techId] || 0) + techCount;
-            }
-        });
+                if (isToday) {
+                    techTodayTotals[techId] = (techTodayTotals[techId] || 0) + techCount;
+                    totalToday += techCount;
+                }
+                if (isThisMonth) {
+                    techMonthlyTotals[techId] = (techMonthlyTotals[techId] || 0) + techCount;
+                }
+            });
+        }
     });
 
     Object.keys(techTodayTotals).forEach(tid => {
@@ -178,7 +194,8 @@ function updateKPIs() {
 // ------------------------------------------
 
 document.addEventListener('DOMContentLoaded', async () => {
-    await syncWithCloud();
+    loadLocalData(); // Cargar lo que tengamos en PC primero
+    await syncWithCloud(); // Intentar bajar lo de la nube
     updateDate();
     initNavigation();
     initForm();
